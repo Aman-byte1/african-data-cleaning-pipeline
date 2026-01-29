@@ -6,7 +6,8 @@ import numpy as np
 from datasets import load_dataset, Dataset
 from huggingface_hub import HfApi, hf_hub_download
 from sentence_transformers import SentenceTransformer, util
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
+from transformers import pipeline
+from comet import download_model, load_from_checkpoint
 import re
 
 # Configuration
@@ -30,14 +31,17 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {device}")
 
 # LID Model
-lid_pipeline = pipeline("text-classification", model="UBC-NLP/afrolid_1.5", device=device)
+lid_pipeline = pipeline("text-classification", model="UBC-NLP/afrolid_1.5", device=0 if device == "cuda" else -1)
 
 # Semantic Similarity Model
 labse_model = SentenceTransformer('sentence-transformers/LaBSE').to(device)
 
-# QE Model
-qe_tokenizer = AutoTokenizer.from_pretrained("masakhane/africomet-qe-stl")
-qe_model = AutoModelForSequenceClassification.from_pretrained("masakhane/africomet-qe-stl").to(device)
+# QE Model (Using unbabel-comet)
+print("Loading QE model...")
+qe_model_path = download_model("masakhane/africomet-qe-stl")
+qe_model = load_from_checkpoint(qe_model_path)
+if device == "cuda":
+    qe_model = qe_model.to(device)
 
 api = HfApi(token=HF_TOKEN)
 
@@ -176,17 +180,19 @@ def filter_batch(batch, expected_iso, seen_hashes):
         tgt_emb = labse_model.encode(subset_tgt, convert_to_tensor=True)
         cos_sim = util.cos_sim(src_emb, tgt_emb).diagonal()
     
-    # 4. QE Filtering
-    # Note: For large batches, QE should also be batched.
-    # This is a simplified implementation of the QE check.
+    # 4. QE Filtering (AfriCOMET)
+    qe_data = [{"src": s, "mt": t} for s, t in zip(subset_src, subset_tgt)]
+    # AfriCOMET-QE-STL returns a prediction object with 'scores'
+    qe_outputs = qe_model.predict(qe_data, batch_size=32, gpus=1 if device == "cuda" else 0)
+    qe_scores = qe_outputs.scores
+    
     for i in range(len(final_indices)):
-        if cos_sim[i] > SIMILARITY_THRESHOLD:
-            # Actual QE model check could be added here if needed
-            # For now, we follow the logic provided
+        if cos_sim[i] > SIMILARITY_THRESHOLD and qe_scores[i] > QE_THRESHOLD:
             filtered.append({
                 "sentence_eng": subset_src[i],
                 "sentence_tgt": subset_tgt[i],
-                "score_sim": float(cos_sim[i])
+                "score_sim": float(cos_sim[i]),
+                "score_qe": float(qe_scores[i])
             })
             
     return filtered

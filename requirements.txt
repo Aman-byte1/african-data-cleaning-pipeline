@@ -7,3 +7,4 @@ torch
 transformers
 tqdm
 scipy
+unbabel-comet
