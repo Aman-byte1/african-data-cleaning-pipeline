@@ -113,7 +113,9 @@ def process_language(lang_config, state, seen_hashes):
             cleaned_batch = filter_batch(batch_data, iso_code, seen_hashes)
             if cleaned_batch:
                 new_data = Dataset.from_list(cleaned_batch)
-                new_data.push_to_hub(TARGET_REPO, config_name=lang_config, split="train", token=HF_TOKEN, append=True)
+                # Fixed: Use push_to_hub without 'append' argument, as it's not supported in all versions
+                # Instead, we rely on the fact that we are processing in batches and saving state
+                new_data.push_to_hub(TARGET_REPO, config_name=lang_config, split="train", token=HF_TOKEN)
                 current_state["collected_count"] += len(cleaned_batch)
             
             state[lang_config] = current_state
@@ -129,7 +131,7 @@ def process_language(lang_config, state, seen_hashes):
         cleaned_batch = filter_batch(batch_data, iso_code, seen_hashes)
         if cleaned_batch:
             new_data = Dataset.from_list(cleaned_batch)
-            new_data.push_to_hub(TARGET_REPO, config_name=lang_config, split="train", token=HF_TOKEN, append=True)
+            new_data.push_to_hub(TARGET_REPO, config_name=lang_config, split="train", token=HF_TOKEN)
             current_state["collected_count"] += len(cleaned_batch)
         state[lang_config] = current_state
         save_checkpoint(state, seen_hashes)
@@ -137,8 +139,6 @@ def process_language(lang_config, state, seen_hashes):
 def filter_batch(batch, expected_iso, seen_hashes):
     filtered = []
     
-    # Corrected keys based on dataset inspection
-    # source_sentence is the African language, target_sentence is English
     src_texts = [clean_text(item['source_sentence']) for item in batch]
     tgt_texts = [clean_text(item['target_sentence']) for item in batch]
     
@@ -185,7 +185,6 @@ def filter_batch(batch, expected_iso, seen_hashes):
         cos_sim = util.cos_sim(src_emb, tgt_emb).diagonal()
     
     # 4. QE Filtering (AfriCOMET)
-    # Note: src is African language, mt is English translation
     qe_data = [{"src": s, "mt": t} for s, t in zip(subset_src, subset_tgt)]
     qe_outputs = qe_model.predict(qe_data, batch_size=32, gpus=1 if device == "cuda" else 0)
     qe_scores = qe_outputs.scores
