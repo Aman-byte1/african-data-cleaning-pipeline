@@ -30,10 +30,12 @@ MAX_RATIO = 2.0
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {device}")
 
-# LID Model
+# LID Model (AfroLID)
+print("Loading AfroLID model...")
 lid_pipeline = pipeline("text-classification", model="UBC-NLP/afrolid_1.5", device=0 if device == "cuda" else -1)
 
 # Semantic Similarity Model
+print("Loading LaBSE model...")
 labse_model = SentenceTransformer('sentence-transformers/LaBSE').to(device)
 
 # QE Model (Using unbabel-comet)
@@ -135,8 +137,10 @@ def process_language(lang_config, state, seen_hashes):
 def filter_batch(batch, expected_iso, seen_hashes):
     filtered = []
     
-    src_texts = [clean_text(item['sentence_eng']) for item in batch]
-    tgt_texts = [clean_text(item['sentence_tgt']) for item in batch]
+    # Corrected keys based on dataset inspection
+    # source_sentence is the African language, target_sentence is English
+    src_texts = [clean_text(item['source_sentence']) for item in batch]
+    tgt_texts = [clean_text(item['target_sentence']) for item in batch]
     
     # 1. Rule-Based & Deduplication
     valid_indices = []
@@ -160,10 +164,10 @@ def filter_batch(batch, expected_iso, seen_hashes):
 
     if not valid_indices: return []
 
-    # 2. LID Filtering
+    # 2. LID Filtering (AfroLID)
     final_indices = []
-    subset_tgt = [tgt_texts[i] for i in valid_indices]
-    lid_results = lid_pipeline(subset_tgt, truncation=True)
+    subset_src = [src_texts[i] for i in valid_indices]
+    lid_results = lid_pipeline(subset_src, truncation=True)
     
     for idx, res in enumerate(lid_results):
         if res['label'] == expected_iso:
@@ -181,16 +185,16 @@ def filter_batch(batch, expected_iso, seen_hashes):
         cos_sim = util.cos_sim(src_emb, tgt_emb).diagonal()
     
     # 4. QE Filtering (AfriCOMET)
+    # Note: src is African language, mt is English translation
     qe_data = [{"src": s, "mt": t} for s, t in zip(subset_src, subset_tgt)]
-    # AfriCOMET-QE-STL returns a prediction object with 'scores'
     qe_outputs = qe_model.predict(qe_data, batch_size=32, gpus=1 if device == "cuda" else 0)
     qe_scores = qe_outputs.scores
     
     for i in range(len(final_indices)):
         if cos_sim[i] > SIMILARITY_THRESHOLD and qe_scores[i] > QE_THRESHOLD:
             filtered.append({
-                "sentence_eng": subset_src[i],
-                "sentence_tgt": subset_tgt[i],
+                "source_sentence": subset_src[i],
+                "target_sentence": subset_tgt[i],
                 "score_sim": float(cos_sim[i]),
                 "score_qe": float(qe_scores[i])
             })
