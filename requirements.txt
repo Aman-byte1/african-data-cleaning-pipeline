@@ -1,0 +1,9 @@
+datasets
+huggingface_hub
+numpy
+pandas
+sentence-transformers
+torch
+transformers
+tqdm
+scipy
